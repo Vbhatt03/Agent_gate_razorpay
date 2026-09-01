@@ -1,0 +1,26 @@
+{
+  "name": "agentgate",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.22.0",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @agentgate/gateway dev",
+    "build": "pnpm -r build",
+    "lint": "prettier --check .",
+    "format": "prettier --write .",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter @agentgate/db generate",
+    "db:migrate": "pnpm --filter @agentgate/db migrate",
+    "db:seed": "pnpm --filter @agentgate/db seed",
+    "demo:e2e": "tsx scripts/demo-e2e.ts"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.2"
+  }
+}
