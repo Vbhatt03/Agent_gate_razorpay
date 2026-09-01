@@ -8,9 +8,9 @@ export const demoPolicy = {
   maxTxnPaise: 500_000,
   dailySpendCapPaise: 1_500_000,
   discountFloorPct: "0",
-  approvalThresholdPaise: 500_000,
+  approvalThresholdPaise: 49_000,
   allowedCategories: ["audio", "accessories"],
-  maxOrdersPerHour: 3,
+  maxOrdersPerHour: 100,
 };
 
 export const demoCatalog = [

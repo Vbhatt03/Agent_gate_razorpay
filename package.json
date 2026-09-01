@@ -16,11 +16,14 @@
     "db:generate": "pnpm --filter @agentgate/db generate",
     "db:migrate": "pnpm --filter @agentgate/db migrate",
     "db:seed": "pnpm --filter @agentgate/db seed",
-    "demo:e2e": "tsx scripts/demo-e2e.ts"
+    "demo:e2e": "tsx scripts/demo-e2e.ts",
+    "demo:buyer-agent": "pnpm --filter @agentgate/demo-buyer-agent start",
+    "test:all": "tsx scripts/test-all.ts"
   },
   "devDependencies": {
     "prettier": "^3.6.2",
     "tsx": "^4.23.13",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }

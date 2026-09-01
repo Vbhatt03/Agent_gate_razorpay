@@ -2,27 +2,17 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
+import type { AgentRepository, StoredAgent } from "../agents/repository.js";
+import type { PolicyDataRepository } from "../policy/repository.js";
+import { evaluateNegotiation } from "../policy/engine.js";
 
-type McpDeps = {
+export type McpDeps = {
   catalogRepository?: {
     search(opts: { query?: string; maxPricePaise?: number; category?: string }): Promise<Array<{ sku: string; name: string; pricePaise: number; category: string; inStock: boolean }>>;
     findBySku(sku: string): Promise<unknown>;
   };
-  agentRepository?: unknown;
-  policyDataRepository?: {
-    getPolicy(merchantId: string): Promise<unknown>;
-    getCatalogItem(merchantId: string, sku: string): Promise<unknown>;
-    getTodaySpendPaise(agentId: string): Promise<number>;
-    getOrdersInLastHour(agentId: string): Promise<number>;
-    createNegotiation(input: {
-      agentId: string;
-      sku: string;
-      requestedPricePaise: number;
-      offeredPricePaise: number | null;
-      reasonText: string | null;
-      policyResult: object;
-    }): Promise<void>;
-  };
+  agentRepository?: AgentRepository;
+  policyDataRepository?: PolicyDataRepository;
   orderService?: {
     createOrder(params: {
       correlationId: string;
@@ -30,7 +20,7 @@ type McpDeps = {
       quantity: number;
       agreedPricePaise: number;
       idempotencyKey: string;
-      agent: unknown;
+      agent: StoredAgent;
     }): Promise<unknown>;
     getOrderById(orderId: string): Promise<unknown>;
   };
@@ -48,6 +38,12 @@ type McpDeps = {
     }): Promise<void>;
   };
 };
+
+async function resolveMcpAgent(agentRepository?: AgentRepository): Promise<StoredAgent | null> {
+  if (!agentRepository) return null;
+  const agents = await agentRepository.listAll();
+  return agents.find((a) => a.status === "active") ?? agents[0] ?? null;
+}
 
 export function createMcpServer(deps: McpDeps) {
   const server = new McpServer({ name: "AgentGate", version: "0.1.0" });
@@ -109,21 +105,63 @@ export function createMcpServer(deps: McpDeps) {
       },
     },
     async ({ sku, target_price_paise }) => {
-      if (!deps.policyDataRepository) {
-        return { content: [{ type: "text", text: JSON.stringify({ error: "policy unavailable" }) }], isError: true as const };
+      const repo = deps.policyDataRepository;
+      if (!repo) {
+        return { content: [{ type: "text", text: JSON.stringify({ allowed: false, error: "policy unavailable" }) }], isError: true as const };
       }
+      const agent = await resolveMcpAgent(deps.agentRepository);
+      if (!agent) {
+        return { content: [{ type: "text", text: JSON.stringify({ allowed: false, error: "no agent available" }) }], isError: true as const };
+      }
+      const [policy, item, todaySpendPaise, ordersInLastHour] = await Promise.all([
+        repo.getPolicy(agent.merchantId),
+        repo.getCatalogItem(agent.merchantId, sku),
+        repo.getTodaySpendPaise(agent.id),
+        repo.getOrdersInLastHour(agent.id),
+      ]);
+      if (!policy || !item) {
+        return { content: [{ type: "text", text: JSON.stringify({ allowed: false, reason: "Product or policy not found" }) }], isError: true as const };
+      }
+      const decision = evaluateNegotiation(
+        policy,
+        { agentStatus: agent.status, item, todaySpendPaise, ordersInLastHour },
+        target_price_paise,
+      );
+      if (!decision.allowed) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              allowed: false,
+              reason: `Blocked by policy rule: ${decision.reason}.`,
+              policy_rule: decision.reason,
+              minimum_offer_paise: decision.minimumOfferPaise,
+            }, null, 2),
+          }],
+          isError: true,
+        };
+      }
+      const offeredPricePaise = Math.max(target_price_paise, decision.minimumOfferPaise);
       const correlationId = randomUUID();
       try {
-        await deps.policyDataRepository!.createNegotiation({
-          agentId: "mcp-client",
-          sku,
+        await repo.createNegotiation({
+          agentId: agent.id,
+          sku: item.sku,
           requestedPricePaise: target_price_paise,
-          offeredPricePaise: target_price_paise,
-          reasonText: null,
-          policyResult: {},
+          offeredPricePaise,
+          reasonText: decision.reason ?? "Offer within the merchant's allowed price bounds.",
+          policyResult: decision,
         });
         return {
-          content: [{ type: "text", text: JSON.stringify({ allowed: true, offered_price_paise: target_price_paise, correlation_id: correlationId }, null, 2) }],
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              allowed: true,
+              offered_price_paise: offeredPricePaise,
+              minimum_offer_paise: decision.minimumOfferPaise,
+              correlation_id: correlationId,
+            }, null, 2),
+          }],
         };
       } catch (err) {
         return {
@@ -149,18 +187,22 @@ export function createMcpServer(deps: McpDeps) {
       if (!deps.orderService) {
         return { content: [{ type: "text", text: JSON.stringify({ status: "error", reason: "order service unavailable" }) }], isError: true as const };
       }
+      const agent = await resolveMcpAgent(deps.agentRepository);
+      if (!agent) {
+        return { content: [{ type: "text", text: JSON.stringify({ status: "error", reason: "no agent available" }) }], isError: true as const };
+      }
       const correlationId = randomUUID();
       try {
-        const result = await deps.orderService!.createOrder({
+        const result = (await deps.orderService!.createOrder({
           correlationId,
           sku,
           quantity,
           agreedPricePaise: agreed_price_paise,
           idempotencyKey: `mcp-${correlationId}`,
-          agent: { id: "mcp-client", merchantId: "", name: "MCP Client", status: "active" },
-        });
+          agent,
+        })) as Record<string, unknown>;
         return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify({ ...result, order_id: correlationId }, null, 2) }],
         };
       } catch (err) {
         return {

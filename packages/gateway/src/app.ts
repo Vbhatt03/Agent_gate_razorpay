@@ -97,7 +97,20 @@ export function buildApp(dependencies: AppDependencies = {}) {
     const q = request.query as { limit?: string };
     const limit = Number(q.limit ?? 50);
     const entries = await dependencies.auditRepository.getRecentEntries(limit);
-    return { entries };
+    return {
+      entries: entries.map((e) => ({
+        id: e.id,
+        correlation_id: e.correlationId,
+        entity_type: e.entityType,
+        entity_id: e.entityId ?? null,
+        action: e.action,
+        input_json: e.inputJson ?? null,
+        output_json: e.outputJson ?? null,
+        policy_result: e.policyResult ?? null,
+        created_at: e.createdAt,
+        agent_id: e.agentId ?? null,
+      })),
+    };
   });
 
   app.get("/v1/catalog", async (request, reply) => {
@@ -445,7 +458,7 @@ export function buildApp(dependencies: AppDependencies = {}) {
     }
     const agent = await authenticateAgent(request.headers.authorization, dependencies.agentRepository);
     if (!agent) {
-      return reply.code(401).send({ error: "invalid_agent_credentials" });
+      return { policy: null };
     }
     const policy = await dependencies.policyDataRepository.getPolicy(agent.merchantId);
     if (!policy) {

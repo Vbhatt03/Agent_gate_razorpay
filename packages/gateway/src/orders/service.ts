@@ -75,7 +75,28 @@ export function createOrderService(deps: OrderServiceDeps) {
     };
 
     const decision = evaluateOrder(policy, context, { agreedUnitPricePaise: agreedPricePaise, quantity });
-
+    // Idempotency: if this idempotency_key already produced an order, return the
+    // recorded outcome instead of inserting a duplicate (unique-constraint 500).
+    const existingByKey = await deps.pool.query<{ status: string; policy_checks: unknown }>(
+      `SELECT status, policy_checks FROM orders WHERE idempotency_key = $1 LIMIT 1`,
+      [idempotencyKey],
+    );
+    if (existingByKey.rows.length > 0) {
+      const existing = existingByKey.rows[0];
+      let existingRule: string | undefined = decision.reason;
+      try {
+        const checks = JSON.parse(String(existing.policy_checks));
+        existingRule = (checks as Array<{ passed: boolean; rule: string }>).find((c) => !c.passed)?.rule;
+      } catch {
+        /* fall back to the freshly computed reason */
+      }
+      return {
+        status: existing.status,
+        ...(existingRule ? { policy_rule: existingRule } : {}),
+        correlation_id: correlationId,
+        idempotent: true,
+      };
+    }
     await recordOrder({
       correlationId,
       agentId: agent.id,
