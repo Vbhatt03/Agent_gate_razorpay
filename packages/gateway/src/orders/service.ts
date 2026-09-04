@@ -163,9 +163,9 @@ export function createOrderService(deps: OrderServiceDeps) {
       };
     }
 
-    const totalPaise = agreedPricePaise * quantity;
-    const rpResult = await rpAdapter.createPaymentLink({
-      amountPaise: totalPaise,
+    const totalPaise = Math.round(agreedPricePaise * quantity);
+const rpResult = await rpAdapter.createPaymentLink({
+  amountPaise: totalPaise,
       receipt: `ag-${idempotencyKey.slice(0, 12)}`,
       notes: {
         agent_id: agent.id,
@@ -351,7 +351,7 @@ export function createOrderService(deps: OrderServiceDeps) {
     }
 
     const rpResult = await rpAdapter.createPaymentLink({
-      amountPaise: order.amount_paise,
+  amountPaise: Math.round(Number(order.amount_paise)),
       receipt: `ag-${order.idempotency_key.slice(0, 12)}`,
       notes: {
         agent_id: order.agent_id,
