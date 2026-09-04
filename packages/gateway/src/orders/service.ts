@@ -288,7 +288,7 @@ export function createOrderService(deps: OrderServiceDeps) {
     return result.rows;
   }
 
-  async function approveOrder(params: {
+    async function approveOrder(params: {
     orderId: string;
     approverId: string;
     comment?: string;
@@ -302,35 +302,89 @@ export function createOrderService(deps: OrderServiceDeps) {
       [orderId, approverId, comment ?? null],
     );
 
-    await deps.pool.query(
-      `UPDATE orders SET status = 'pending', updated_at = NOW() WHERE id = $1`,
-      [orderId],
-    );
-
-    const ownerRes = await deps.pool.query<{ agent_id: string; merchant_id: string }>(
-      `SELECT o.agent_id, a.merchant_id
+    const orderRes = await deps.pool.query<{
+      agent_id: string;
+      merchant_id: string;
+      quantity: number;
+      amount_paise: number;
+      idempotency_key: string;
+      sku: string;
+    }>(
+      `SELECT o.agent_id, a.merchant_id, o.quantity, o.amount_paise, o.idempotency_key, c.sku
        FROM orders o
        JOIN agents a ON a.id = o.agent_id
+       JOIN catalog_items c ON c.id = o.catalog_item_id
        WHERE o.id = $1`,
       [orderId],
     );
-    const owner = ownerRes.rows[0];
-    if (owner) {
+    const order = orderRes.rows[0];
+
+    if (!order) {
+      await deps.pool.query(
+        `UPDATE orders SET status = 'pending', updated_at = NOW() WHERE id = $1`,
+        [orderId],
+      );
+      return { status: "approved", order_id: orderId };
+    }
+
+    // Approval was only withholding the Razorpay call — now that a human has
+    // signed off, run the exact same "policy approved -> create Razorpay
+    // order" step createOrder() runs for a non-gated order. Without this,
+    // approving an order only flipped its DB status and never actually
+    // produced a payment link.
+    if (!rpAdapter) {
+      await deps.pool.query(
+        `UPDATE orders SET status = 'pending', updated_at = NOW() WHERE id = $1`,
+        [orderId],
+      );
       await deps.recordAudit({
         correlationId: randomUUID(),
-        merchantId: owner.merchant_id,
-        agentId: owner.agent_id,
+        merchantId: order.merchant_id,
+        agentId: order.agent_id,
         entityType: "order",
         entityId: orderId,
         action: "order.approved",
         inputJson: { approver_id: approverId, comment: comment ?? null },
-        outputJson: { status: "approved", order_id: orderId },
+        outputJson: { status: "approved", order_id: orderId, warning: "razorpay_not_configured" },
       });
+      return { status: "approved", order_id: orderId };
     }
 
-    return { status: "approved", order_id: orderId };
-  }
+    const rpResult = await rpAdapter.createPaymentLink({
+      amountPaise: order.amount_paise,
+      receipt: `ag-${order.idempotency_key.slice(0, 12)}`,
+      notes: {
+        agent_id: order.agent_id,
+        sku: order.sku,
+        merchant_id: order.merchant_id,
+        correlation_id: orderId,
+        description: `AgentGate order (approved): ${order.sku} x${order.quantity} — ${paiseToDisplayString(order.amount_paise)}`,
+      },
+    });
 
+    await deps.pool.query(
+      `UPDATE orders SET status = 'pending', razorpay_order_id = $2, payment_link = $3, updated_at = NOW() WHERE id = $1`,
+      [orderId, rpResult.razorpayOrderId, rpResult.paymentLink],
+    );
+
+    await deps.recordAudit({
+      correlationId: randomUUID(),
+      merchantId: order.merchant_id,
+      agentId: order.agent_id,
+      entityType: "order",
+      entityId: orderId,
+      action: "order.approved",
+      inputJson: { approver_id: approverId, comment: comment ?? null },
+      outputJson: {
+        status: "approved",
+        order_id: orderId,
+        razorpay_order_id: rpResult.razorpayOrderId,
+        payment_link: rpResult.paymentLink,
+      },
+    });
+
+    return { status: "approved", order_id: orderId, payment_link: rpResult.paymentLink };
+  }
   async function rejectOrder(params: {
     orderId: string;
     approverId: string;
