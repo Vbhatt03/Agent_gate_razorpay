@@ -183,8 +183,9 @@ app.addHook("onClose", async () => {
 async function start() {
   try {
     await app.listen({ host: config.HOST, port: config.PORT });
-    mcpApp.listen(3002, () => {
-      app.log.info("MCP server on port 3002");
+    const mcpPort = config.MCP_PORT;
+    mcpApp.listen(mcpPort, () => {
+      app.log.info(`MCP server on port ${mcpPort}`);
     });
   } catch (error) {
     app.log.error(error, "Gateway failed to start");
