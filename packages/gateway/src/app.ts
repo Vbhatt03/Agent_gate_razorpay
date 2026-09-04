@@ -475,6 +475,9 @@ export function buildApp(dependencies: AppDependencies = {}) {
     const pending = await dependencies.orderService.listPendingApprovals(q.merchant_id);
     return { approvals: pending };
   });
+  app.get("/", async () => {
+  return { service: "agentgate-gateway", status: "ok" };
+  });
 
   app.post("/v1/orders/:order_id/approve", async (request, reply) => {
     if (!dependencies.orderService) {
