@@ -3,6 +3,8 @@ loadEnv({ path: "../../.env" });
 import crypto from "node:crypto";
 import { randomUUID } from "node:crypto";
 
+import fastifyHttpProxy from "@fastify/http-proxy";
+
 import { buildApp } from "./app.js";
 import { createAgentRepository } from "./agents/repository.js";
 import { createAuditRepository } from "./audit/repository.js";
@@ -60,6 +62,21 @@ const mcpApp = createExpressMcpApp({
   policyDataRepository,
   orderService,
   auditRepository,
+});
+
+// The MCP server (mcpApp, an Express app) never listens on a publicly
+// reachable host — it's bound to 127.0.0.1 only, inside the same
+// container/process as the Fastify app. Fastify proxies any request under
+// /mcp to it internally via @fastify/http-proxy, so external MCP clients
+// only ever see ONE public port (config.PORT), matching Render's (and most
+// free-tier hosts') one-exposed-port-per-service model. This keeps the MCP
+// surface genuinely reachable by external agents — just via the same public
+// URL and port as the REST API, at the /mcp path, rather than its own port.
+await app.register(fastifyHttpProxy, {
+  upstream: `http://127.0.0.1:${config.MCP_PORT}`,
+  prefix: "/mcp",
+  rewritePrefix: "/mcp",
+  http2: false,
 });
 
 app.addContentTypeParser("application/json", { parseAs: "buffer" }, (req, body, done) => {
@@ -184,8 +201,12 @@ async function start() {
   try {
     await app.listen({ host: config.HOST, port: config.PORT });
     const mcpPort = config.MCP_PORT;
-    mcpApp.listen(mcpPort, () => {
-      app.log.info(`MCP server on port ${mcpPort}`);
+    // Deliberately 127.0.0.1, not config.HOST: this listener must stay
+    // internal-only. External MCP traffic reaches it exclusively via the
+    // Fastify proxy registered above (/mcp -> 127.0.0.1:MCP_PORT), on the
+    // one public port Render (or any single-port free host) exposes.
+    mcpApp.listen(mcpPort, "127.0.0.1", () => {
+      app.log.info(`MCP server on 127.0.0.1:${mcpPort} (internal only, proxied via /mcp)`);
     });
   } catch (error) {
     app.log.error(error, "Gateway failed to start");
