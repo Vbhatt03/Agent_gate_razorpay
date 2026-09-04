@@ -307,6 +307,27 @@ export function createOrderService(deps: OrderServiceDeps) {
       [orderId],
     );
 
+    const ownerRes = await deps.pool.query<{ agent_id: string; merchant_id: string }>(
+      `SELECT o.agent_id, a.merchant_id
+       FROM orders o
+       JOIN agents a ON a.id = o.agent_id
+       WHERE o.id = $1`,
+      [orderId],
+    );
+    const owner = ownerRes.rows[0];
+    if (owner) {
+      await deps.recordAudit({
+        correlationId: randomUUID(),
+        merchantId: owner.merchant_id,
+        agentId: owner.agent_id,
+        entityType: "order",
+        entityId: orderId,
+        action: "order.approved",
+        inputJson: { approver_id: approverId, comment: comment ?? null },
+        outputJson: { status: "approved", order_id: orderId },
+      });
+    }
+
     return { status: "approved", order_id: orderId };
   }
 
@@ -328,6 +349,27 @@ export function createOrderService(deps: OrderServiceDeps) {
       `UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
       [orderId],
     );
+
+    const ownerRes = await deps.pool.query<{ agent_id: string; merchant_id: string }>(
+      `SELECT o.agent_id, a.merchant_id
+       FROM orders o
+       JOIN agents a ON a.id = o.agent_id
+       WHERE o.id = $1`,
+      [orderId],
+    );
+    const owner = ownerRes.rows[0];
+    if (owner) {
+      await deps.recordAudit({
+        correlationId: randomUUID(),
+        merchantId: owner.merchant_id,
+        agentId: owner.agent_id,
+        entityType: "order",
+        entityId: orderId,
+        action: "order.rejected",
+        inputJson: { approver_id: approverId, comment: comment ?? null },
+        outputJson: { status: "rejected", order_id: orderId },
+      });
+    }
 
     return { status: "rejected", order_id: orderId };
   }
