@@ -2,7 +2,7 @@
 
 AgentGate is a test-mode gateway that lets external buyer agents discover a Razorpay merchant catalog, negotiate within merchant policy, and create auditable purchases.
 # LIVE ON
-https://agent-gate-razorpay.onrender.com
+https://agent-gate-razorpay-dashboard.vercel.app/
 ## Current milestone
 
 The first milestone is deliberately small: a typed Fastify gateway with a health endpoint and an automated test. The database, Razorpay, MCP tools, and dashboard are introduced in later milestones after this baseline is stable.
